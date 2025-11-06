@@ -1,0 +1,223 @@
+---
+title: "Project Proposal: Water Access and Waterborne Disease Analysis"
+format: pdf
+editor: visual
+execute:
+  echo: false
+---
+
+Danielle Chang 922215038 daychang\@ucdavis.edu
+
+Rhea Mishra 922614163 rhmishra\@ucdavis.edu
+
+Evan Liu 922033126 naoliu\@ucdavis.edu
+
+Davrina Rianda 918983400 drianda\@ucdavis.edu
+
+## 1. Project Description, Background, and Overall Goal
+
+Access to clean drinking water is an overlooked yet crucial factor to ensure well-being and general health. Clean drinking water helps prevent water borne diseases, including cholera, which often present with symptoms such as diarrhea that can impair nutrient absorption from foods. If left untreated, this condition could lead to malnutrition, especially in children as one of the high-risk groups.
+
+Although countries have made substantial efforts to ensure accessibility to clean drinking water, there are still gaps in the progress across countries, with some countries still demonstrating low accessibility. Several countries are still also struggling to reduce the prevalence of water borne diseases and malnutrition.
+
+Our research project aims to investigate the country-level associations between the proportion of population with access to clean drinking water and the prevalence of cholera and malnutrition. Our analysis will also capture the associations across multiple years to assess how they have changed over time.
+
+## 2. Dataset Description
+
+### WASH Dataset
+
+This dataset is from the World Health Organization (WHO) Global Health Observatory (GHO). It measures the percentage of a country's population that has access to safely managed drinking-water services. For this, they define accessible water to be accessible on specific premises, available when needed, and free from all contamination. This study reflects access to clean drinking water. The dataset contains data from the years 2000-2022.
+
+### Stunting Dataset
+
+This dataset is also from the WHO and looks into Stunting (chronic malnutrition). It contains the prevalence of stunting among children under five years old, a key measure of chronic malnutrition caused by long-term insufficient nutrient intake and repeated infections. It has information on linking nutritional outcomes to environmental and health factors, including access to clean water and sanitation. The dataset has contains data from 1990 to 2024. Both datasets have data for the years 2000 - 2022.
+
+## 3. Marginal Distribution of Key Variables
+
+```{r setup, message=FALSE, warning=FALSE}
+# Load libraries
+library(tidyverse)
+library(skimr)
+```
+
+```{r load-data, message=FALSE}
+# Load datasets
+wash <- read_csv('wash.csv', show_col_types = FALSE)
+stunt <- read_csv('stunt.csv', show_col_types = FALSE)
+```
+
+### Summary Statistics
+
+#### WASH Dataset (Safely Managed Drinking Water)
+
+The WASH dataset measures the **percentage of a country's population with access to safely managed drinking water**. The dataset contains 6,693 observations across 137 countries from 2000-2022, broken down by residence type (Rural, Urban, Total).
+
+The table below shows summary statistics for water access across all countries and years:
+
+```{r wash-summary-stats}
+# Summary statistics for water access
+wash %>%
+  summarise(
+    `Total Observations` = n(),
+    `Mean (%)` = mean(FactValueNumeric, na.rm = TRUE),
+    `Median (%)` = median(FactValueNumeric, na.rm = TRUE),
+    `Std Dev` = sd(FactValueNumeric, na.rm = TRUE),
+    `Min (%)` = min(FactValueNumeric, na.rm = TRUE),
+    `25th Percentile` = quantile(FactValueNumeric, 0.25, na.rm = TRUE),
+    `75th Percentile` = quantile(FactValueNumeric, 0.75, na.rm = TRUE),
+    `Max (%)` = max(FactValueNumeric, na.rm = TRUE)
+  ) %>%
+  knitr::kable(digits = 2, caption = "Summary Statistics: Water Access (%)")
+```
+
+#### Stunting Dataset (Prevalence in Children Under 5)
+
+The stunting dataset measures the **prevalence of chronic malnutrition in children under 5 years old**, expressed as the rate per 100 children. The dataset contains 17,295 observations across 208 geographic areas from 1990-2024, broken down by sex (Female, Male, Total).
+
+The table below shows summary statistics for stunting prevalence across all geographic areas and years:
+
+```{r stunt-summary-stats}
+# Summary statistics for stunting
+stunt %>%
+  summarise(
+    `Total Observations` = n(),
+    `Mean (per 100)` = mean(RATE_PER_100_N, na.rm = TRUE),
+    `Median (per 100)` = median(RATE_PER_100_N, na.rm = TRUE),
+    `Std Dev` = sd(RATE_PER_100_N, na.rm = TRUE),
+    `Min (per 100)` = min(RATE_PER_100_N, na.rm = TRUE),
+    `25th Percentile` = quantile(RATE_PER_100_N, 0.25, na.rm = TRUE),
+    `75th Percentile` = quantile(RATE_PER_100_N, 0.75, na.rm = TRUE),
+    `Max (per 100)` = max(RATE_PER_100_N, na.rm = TRUE)
+  ) %>%
+  knitr::kable(digits = 2, caption = "Summary Statistics: Stunting Prevalence (per 100 children)")
+```
+
+### Visualizations of Marginal Distributions
+
+#### Distribution of Water Access
+
+```{r viz-wash-dist, fig.width=10, fig.height=5}
+# Histogram of water access
+ggplot(wash, aes(x = FactValueNumeric)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Population Using Safely Managed Drinking Water",
+       subtitle = "All countries and residence types, 2000-2022",
+       x = "Percentage (%)",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+```{r viz-wash-boxplot, fig.width=10, fig.height=5}
+# Boxplot by residence area type
+ggplot(wash, aes(x = Dim1, y = FactValueNumeric, fill = Dim1)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "Water Access by Residence Area Type",
+       x = "Residence Area Type",
+       y = "Percentage (%)") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold"))
+```
+
+#### Distribution of Stunting Prevalence
+
+```{r viz-stunt-dist, fig.width=10, fig.height=5}
+# Histogram of stunting prevalence
+ggplot(stunt, aes(x = RATE_PER_100_N)) +
+  geom_histogram(bins = 30, fill = "coral", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Stunting Prevalence in Children Under 5",
+       subtitle = "All geographic areas, 1990-2024",
+       x = "Prevalence Rate (per 100 children)",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+```{r viz-stunt-boxplot, fig.width=10, fig.height=5}
+# Boxplot by sex
+ggplot(stunt, aes(x = DIM_SEX, y = RATE_PER_100_N, fill = DIM_SEX)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "Stunting Prevalence by Sex",
+       x = "Sex",
+       y = "Prevalence Rate (per 100 children)") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold"))
+```
+
+### Data Representativeness
+
+#### Geographic Coverage
+
+```{r coverage-analysis}
+# Dataset coverage summary
+cat("WASH Dataset: 137 countries | 2000-2022 | 6,693 observations\n")
+cat("Stunting Dataset: 208 geographic areas | 1990-2024 | 17,295 observations\n")
+cat("Overlapping years: 23 years (2000-2022)\n")
+```
+
+#### Representativeness Evaluation
+
+**The data is sufficiently representative:**
+
+1.  **Geographic Coverage**:
+    -   The WASH dataset includes 137 countries from all WHO regions, providing broad global coverage
+    -   The stunting dataset includes 208 geographic entities, with 12,000 country level observations out of 17,295 total records, ensuring comprehensive country-level analysis is possible
+2.  **Temporal Coverage**:
+    -   The two datasets have an extended time period of overlap from 2000-2022 (23 years), allowing us to assess long term trends in water access and child health outcomes
+3.  **Sample Size**:
+    -   With 6,693 observations for WASH and 17,295 for stunting, we have sufficient data and statistical power to detect meaningful associations
+
+**Limitations to consider:**
+
+-   The stunting dataset includes regional data in addition to country level data, so we'll need to filter to country level observations only for our analysis
+-   Not all years have complete data for all countries, so we may have missing data for some country year combinations
+
+## 4. Key Questions & Methodologies
+
+### Question 1: Water Access and Stunting Prevalence
+
+**Research Questions:**
+
+-   What is the country-level relationship between access to safe and clean drinking water and stunting prevalence as an indicator of malnutrition among children under 5 years old?
+-   Do changes in water access over time predict stunting rates across countries?
+
+**Proposed Methodology:**
+
+We would use **linear regression models** to examine the relationship between water access and stunting prevalence across countries. To account for temporal changes within each country, we would use **first difference regression** to analyze how changes in water access relate to changes in stunting. This approach would account for time-invariant country characteristics by focusing on variation within each country.
+
+### Question 2: Temporal Changes in Association
+
+**Research Questions:**
+
+-   How have the associations changed over time?
+-   Are improvements in water access corresponded to reductions in stunting?
+
+**Proposed Methodology:**
+
+We would investigate whether the association between water access and child health outcomes strengthens, weakens, or remains stable over the observation period using **temporal analysis**. These tests would examine changes in the relationship that might reflect changing infrastructure, hygiene practices, or policies. To test whether correlations differ significantly across periods, we would apply **Fisher's Z transformation**, which normalizes the sampling distributions of correlation coefficients.
+
+### Question 3: Geographic and Economic Variation
+
+**Research Questions:**
+
+-   How do these associations vary across geographic regions and income levels?
+-   Do low vs. high income countries demonstrate different patterns?
+
+**Proposed Methodology:**
+
+We would use **stratified analysis** to examine statistical interaction and determine whether the magnitude of association between water access and health outcomes varies across levels of a third variable such as income level. If water access and health outcomes were independent conditional on income, then water access would provide no additional information once income was known. Finding significant stratification effects would contradict this conditional independence and suggest that water access contributes unique explanatory power even when accounting for income and/or region.
+
+### Assumptions and Limitations
+
+**Key Assumptions:**
+
+-   Linearity in relationships between variables
+-   Independence of observations
+
+**Limitations:**
+
+-   **Causality vs. Correlation**: We cannot definitively establish causal effects from observational data
+-   **Data Quality**: Results depend on the accuracy of data collection methods, which vary across countries and years
+-   **Temporal Gaps**: Not all countries have complete data for all years in the study period
