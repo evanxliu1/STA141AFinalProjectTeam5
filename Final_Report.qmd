@@ -112,7 +112,7 @@ Our data preparation involved five key steps:
 4. **Aggregate and merge datasets** - Average across sex/residence categories, merge on country-year
 5. **Create 2018 cross-sectional dataset** - Focus year with good coverage pre-COVID
 
-```{r data-cleaning}
+```{r data-cleaning-step1-2}
 # Step 1: Filter stunting to country-level only
 stunt_countries <- stunt %>%
   filter(DIM_GEO_CODE_TYPE == "COUNTRY")
@@ -129,7 +129,12 @@ stunt_countries <- stunt_countries %>%
       name_mapping$wash_name[match(GEO_NAME_SHORT, name_mapping$stunt_name)],
     TRUE ~ GEO_NAME_SHORT
   ))
+```
 
+**Step 3: World Bank income classification** - We classify each country according to FY2018 World Bank income tiers (Low income, Lower middle income, Upper middle income, High income). *Code hidden for brevity - includes 130+ country classifications.*
+
+```{r data-cleaning-step3}
+#| echo: false
 # Step 3: World Bank income classification (FY2018)
 income_classification <- tribble(
   ~Country, ~income_tier,
@@ -371,35 +376,36 @@ data_2018 %>%
 
 We employ a multi-faceted analytical strategy using **2018 cross-sectional data** to examine the relationship between water access and child stunting:
 
-| Analysis | Method | Purpose |
-|----------|--------|---------|
-| Cross-sectional association | Pearson correlation, Simple linear regression | Establish basic relationship |
-| Economic confounding | Multiple regression, ANOVA | Test if income explains the relationship |
-| Regional heterogeneity | Stratified analysis, Regional correlations | Examine geographic variation |
+| Step | Method | Purpose |
+|------|--------|---------|
+| 1 | Correlation Analysis | Initial exploration of relationship strength |
+| 2 | ANOVA | Test if income is a significant confounder |
+| 3 | Simple Linear Regression | Quantify water-stunting association |
+| 4 | Multiple Linear Regression | Test association controlling for income |
 
 ## Statistical Methods
 
-### Correlation Analysis
+### 1. Correlation Analysis
 
 We use **Pearson correlation coefficients** to quantify the linear association between water access and stunting prevalence. This measures the strength and direction of the relationship on a scale from -1 (perfect negative) to +1 (perfect positive).
 
-### Simple Linear Regression
+### 2. Analysis of Variance (ANOVA)
+
+Before fitting regression models, we use one-way ANOVA to test whether stunting rates differ significantly across World Bank income tiers. A significant result indicates income should be included as a control variable.
+
+### 3. Simple Linear Regression
 
 To quantify the expected change in stunting for each unit change in water access, we fit:
 
 $$\text{Stunting}_i = \beta_0 + \beta_1 \times \text{WaterAccess}_i + \epsilon_i$$
 
-### Multiple Regression (Controlling for Income)
+### 4. Multiple Linear Regression (Controlling for Income)
 
 To test whether water access predicts stunting *independent of economic development*, we fit:
 
 $$\text{Stunting}_i = \beta_0 + \beta_1 \times \text{WaterAccess}_i + \beta_2 \times \text{IncomeTier}_i + \epsilon_i$$
 
 This allows us to assess whether water access has an effect beyond what income alone explains.
-
-### Analysis of Variance (ANOVA)
-
-We use one-way ANOVA to test whether mean water access and mean stunting differ significantly across World Bank income tiers.
 
 ## Justification for Methods
 
@@ -411,7 +417,11 @@ We use one-way ANOVA to test whether mean water access and mean stunting differ 
 
 ## Research Question 1: Is Water Access Associated with Stunting? (2018)
 
-### Cross-Sectional Relationship
+We address this question using a sequence of statistical methods, building from initial exploration to controlled regression analysis.
+
+### Step 1: Correlation Analysis
+
+First, we examine whether there is a potential linear relationship between water access and stunting using Pearson correlation.
 
 ```{r q1-scatter, fig.width=8, fig.height=5}
 ggplot(data_2018, aes(x = access_water, y = stunting_rate)) +
@@ -427,18 +437,9 @@ ggplot(data_2018, aes(x = access_water, y = stunting_rate)) +
   theme(plot.title = element_text(face = "bold"))
 ```
 
-### Correlation and Regression Results
-
-```{r q1-analysis}
-# Pearson correlation
+```{r q1-correlation}
+# Pearson correlation test
 cor_result <- cor.test(data_2018$access_water, data_2018$stunting_rate)
-
-# Simple linear regression
-model_simple <- lm(stunting_rate ~ access_water, data = data_2018)
-
-# Multiple regression (controlling for income)
-data_2018_income <- data_2018 %>% filter(!is.na(income_tier))
-model_multiple <- lm(stunting_rate ~ access_water + income_tier, data = data_2018_income)
 ```
 
 ```{r q1-correlation-table}
@@ -454,57 +455,159 @@ tibble(
   kable(caption = "Pearson Correlation: Water Access and Stunting (2018)")
 ```
 
-```{r q1-regression-table}
-# Simple regression results
-bind_rows(
-  tidy(model_simple) %>% mutate(Model = "Simple"),
-  tidy(model_multiple) %>% mutate(Model = "Multiple (with Income)")
-) %>%
-  filter(term %in% c("(Intercept)", "access_water")) %>%
-  select(Model, Term = term, Estimate = estimate, `Std. Error` = std.error,
-         `t-value` = statistic, `p-value` = p.value) %>%
-  mutate(
-    Estimate = round(Estimate, 3),
-    `Std. Error` = round(`Std. Error`, 3),
-    `t-value` = round(`t-value`, 2),
-    `p-value` = ifelse(`p-value` < 0.001, "< 0.001", round(`p-value`, 3))
-  ) %>%
-  kable(caption = "Regression Results: Stunting ~ Water Access")
+**Interpretation:** The strong negative correlation (r ≈ -0.73) indicates that countries with higher water access tend to have substantially lower stunting rates. This warrants further investigation with regression analysis.
+
+### Step 2: ANOVA - Testing Income as a Potential Confounder
+
+Before fitting regression models, we test whether income tier significantly affects stunting rates. If income is a significant predictor, it should be included as a control variable in our regression.
+
+```{r q1-anova-setup}
+# Prepare data with income classification
+data_2018_income <- data_2018 %>% filter(!is.na(income_tier))
+
+# ANOVA: Does stunting differ significantly by income tier?
+stunting_income_anova <- aov(stunting_rate ~ income_tier, data = data_2018_income)
+stunting_income_anova_tidy <- tidy(stunting_income_anova)
 ```
 
-```{r q1-model-fit}
+```{r q1-anova-table}
+stunting_income_anova_tidy %>%
+  filter(term != "Residuals") %>%
+  mutate(
+    term = "Income Tier",
+    sumsq = round(sumsq, 1),
+    meansq = round(meansq, 1),
+    statistic = round(statistic, 2),
+    p.value = ifelse(p.value < 0.001, "< 0.001", round(p.value, 4))
+  ) %>%
+  kable(caption = "ANOVA: Stunting Rate by Income Tier (2018)",
+        col.names = c("Source", "df", "Sum Sq", "Mean Sq", "F-statistic", "p-value"))
+```
+
+**Interpretation:** The highly significant ANOVA result (p < 0.001) confirms that stunting rates differ substantially across income tiers. This suggests income is an important confounder that should be controlled for in our regression analysis.
+
+### Step 3: Simple Linear Regression
+
+We first fit a simple linear regression to quantify the relationship between water access and stunting without controlling for other variables.
+
+```{r q1-simple-regression}
+# Simple linear regression: stunting ~ water access
+model_simple <- lm(stunting_rate ~ access_water, data = data_2018)
+```
+
+```{r q1-simple-table}
+tidy(model_simple) %>%
+  mutate(
+    term = case_when(
+      term == "(Intercept)" ~ "Intercept",
+      term == "access_water" ~ "Water Access (%)"
+    ),
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 2),
+    p.value = ifelse(p.value < 0.001, "< 0.001", round(p.value, 3))
+  ) %>%
+  kable(caption = "Simple Linear Regression: Stunting ~ Water Access",
+        col.names = c("Term", "Estimate", "Std. Error", "t-value", "p-value"))
+```
+
+```{r q1-simple-fit}
 tibble(
-  Model = c("Simple Regression", "Multiple Regression (with Income)"),
-  `R-squared` = c(
+  Metric = c("R-squared", "Adjusted R-squared", "N (countries)"),
+  Value = c(
     round(summary(model_simple)$r.squared, 3),
-    round(summary(model_multiple)$r.squared, 3)
-  ),
-  `Adj. R-squared` = c(
     round(summary(model_simple)$adj.r.squared, 3),
-    round(summary(model_multiple)$adj.r.squared, 3)
+    nrow(data_2018)
   )
 ) %>%
-  kable(caption = "Model Fit Comparison")
+  kable(caption = "Simple Regression Model Fit")
 ```
 
-### Interpretation
+**Interpretation:** Each 1-percentage-point increase in water access is associated with approximately 0.30-percentage-point decrease in stunting. The model explains about 53% of the variance in stunting rates (R² ≈ 0.53).
+
+### Step 4: Multiple Linear Regression (Controlling for Income)
+
+Since ANOVA confirmed income is a significant predictor of stunting, we now include it as a control variable to test whether water access has an independent effect.
+
+```{r q1-multiple-regression}
+# Multiple regression: stunting ~ water access + income tier
+model_multiple <- lm(stunting_rate ~ access_water + income_tier, data = data_2018_income)
+```
+
+```{r q1-multiple-table}
+tidy(model_multiple) %>%
+  mutate(
+    term = case_when(
+      term == "(Intercept)" ~ "Intercept",
+      term == "access_water" ~ "Water Access (%)",
+      str_detect(term, "income_tier") ~ str_replace(term, "income_tier", "")
+    ),
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 2),
+    p.value = ifelse(p.value < 0.001, "< 0.001", round(p.value, 3))
+  ) %>%
+  kable(caption = "Multiple Regression: Stunting ~ Water Access + Income Tier",
+        col.names = c("Term", "Estimate", "Std. Error", "t-value", "p-value"))
+```
+
+```{r q1-multiple-fit}
+tibble(
+  Metric = c("R-squared", "Adjusted R-squared", "N (countries)"),
+  Value = c(
+    round(summary(model_multiple)$r.squared, 3),
+    round(summary(model_multiple)$adj.r.squared, 3),
+    nrow(data_2018_income)
+  )
+) %>%
+  kable(caption = "Multiple Regression Model Fit")
+```
+
+### Summary of Findings
 
 ```{r q1-values, include=FALSE}
 r_val <- round(cor_result$estimate, 2)
 beta_simple <- round(coef(model_simple)[2], 3)
 r2_simple <- round(summary(model_simple)$r.squared, 3)
 beta_multiple <- round(coef(model_multiple)[2], 3)
+r2_multiple <- round(summary(model_multiple)$r.squared, 3)
+```
+
+```{r q1-comparison-table}
+tibble(
+  Analysis = c("Correlation", "Simple Regression", "Multiple Regression"),
+  `Water Effect` = c(
+    paste("r =", r_val),
+    paste("β =", beta_simple),
+    paste("β =", beta_multiple)
+  ),
+  `Model Fit` = c(
+    paste("R² =", round(r_val^2, 3)),
+    paste("R² =", r2_simple),
+    paste("R² =", r2_multiple)
+  ),
+  Interpretation = c(
+    "Strong negative association",
+    "Significant without controls",
+    "Significant after controlling for income"
+  )
+) %>%
+  kable(caption = "Summary: Statistical Analysis of Water-Stunting Relationship")
 ```
 
 **Key Findings:**
 
-1. **Strong negative correlation:** Water access and stunting are strongly negatively correlated (r = `r r_val`, p < 0.001). Countries with higher water access have substantially lower stunting rates.
+1. **Correlation analysis** reveals a strong negative association (r = `r r_val`, p < 0.001) between water access and stunting.
 
-2. **Simple regression:** Each 1-percentage-point increase in water access is associated with a `r abs(beta_simple)`-percentage-point decrease in stunting (R² = `r r2_simple`).
+2. **ANOVA** confirms income is a significant confounder (p < 0.001), justifying its inclusion in regression.
 
-3. **After controlling for income:** Water access remains a significant predictor of stunting (β = `r beta_multiple`), though the effect is attenuated. This suggests water access has an effect *beyond* what income alone explains.
+3. **Simple regression** shows each 1% increase in water access is associated with a `r abs(beta_simple)`% decrease in stunting (R² = `r r2_simple`).
+
+4. **Multiple regression** demonstrates that water access remains significant (β = `r beta_multiple`) even after controlling for income, suggesting an independent effect beyond economic development.
 
 ## Research Question 2: Do Income Disparities Affect Both Outcomes? (2018)
+
+Having established that income is a significant confounder in RQ1, we now explore the magnitude of income disparities in both water access and stunting.
 
 ### Water Access by Income Tier
 
