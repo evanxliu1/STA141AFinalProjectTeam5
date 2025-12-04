@@ -1,0 +1,861 @@
+---
+title: "Water Access and Child Stunting: A Global Analysis"
+subtitle: "STA141A Final Project: Team 5"
+author: "Evan Liu, Rhea Mishra, Davrina Rianda, Danielle Chang"
+format:
+  pdf:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    include-in-header:
+      - text: |
+          \usepackage{tocloft}
+          \setlength{\cftbeforetoctitleskip}{-20pt}
+execute:
+  echo: true
+  warning: false
+  message: false
+editor: visual
+---
+
+```{r setup, echo = F}
+# Load libraries
+library(tidyverse)
+library(knitr)
+library(GGally)
+library(broom)
+
+# Set theme for all plots
+theme_set(theme_classic(base_size = 11))
+```
+
+# Executive Summary
+
+Gaps in accessibility to clean drinking water remain substantial across countries. This is crucial because a lack of access to clean drinking water could lead to waterborne diseases and impaired nutrient absorption from foods. If left untreated, these conditions could lead to malnutrition including stunting, a form of chronic malnutrition in children. Our research project investigated the country-level associations between the proportion of the population with access to clean drinking water and the prevalence of stunting among children under 5 years old. We used Water, Sanitation, and Hygiene (WASH) and stunting datasets that captured global data in 2018 on drinking water access and stunting, respectively. A multi-step analytical strategy was used to evaluate the associations, including Pearson correlation, ANOVA, and linear regressions. Country income classification was included as a confounder in the final multiple regression model, which included 108 countries. We found that greater access to clean drinking water was associated with lower stunting prevalence, through the relationship weakened after adjustment (beta in unadjusted model: -0.304, SE: 0.027, p\<0.001; beta in adjusted model: -0.094, SE: 0.040, p=0.022). In our exploratory analysis, we identified that the correlations between water access and stunting varied by region. Future studies should explore causal models using longitudinal panel designs with country fixed effects, include comprehensive sanitation and hygiene indicators, and conduct sub-national analyses where data permits to better understand the multiple factors affecting stunting.
+
+# Introduction
+
+## Background
+
+Access to clean drinking water is an overlooked yet crucial factor in ensuring well-being and general health. Clean drinking water helps prevent waterborne diseases, including cholera, which often presents with symptoms such as diarrhea that can impair nutrient absorption from foods. If left untreated, these conditions could lead to malnutrition, particularly stunting in children, who are a high-risk group. Stunting, a chronic form of malnutrition, affects approximately 150 million children globally and is therefore a crucial issue for countries to solve.
+
+Although countries have made substantial efforts to ensure accessibility to clean drinking water, gaps in progress remain across countries, with some still demonstrating low accessibility. Many countries are also struggling to reduce the prevalence of stunting. Understanding the relationship between water access and child nutritional outcomes is therefore essential. **This provides an opportunity to explore whether access to clean drinking water is associated with stunting prevalence, thereby providing data for governments to inform future public health measures.**
+
+## Project Goals
+
+Our research project aims to investigate the country-level associations between the proportion of the population with access to clean drinking water and the prevalence of stunting as an indicator of child malnutrition. We also explored whether economic factors are a confounder of this relationship and whether the associations varied across regions. By integrating these perspectives, the study aims to provide a more nuanced understanding of the structural factors influencing child health globally.
+
+## Research Questions
+
+This analysis focuses on **2018 data** (pre-COVID, with good global coverage) and addresses three main research questions:
+
+1.  **Is access to safe drinking water associated with child stunting prevalence?**
+2.  **Do lower-income countries have worse water access and higher stunting rates, and does country income level therefore act as a potential confounder of the association between safe drinking water and child stunting?**
+3.  **How do these relationships vary across geographic regions?**
+
+# Data Description
+
+## Data Sources
+
+We use two datasets from the World Health Organization (WHO) Global Health Observatory:
+
+1.  **WASH Dataset (Water, Sanitation and Hygiene):** Measures the percentage of a country's population with access to safely managed drinking water services.
+
+2.  **Stunting Dataset:** Measures the prevalence of stunting (chronic malnutrition) in children under 5 years old, expressed as the rate per 100 children.
+
+```{r load-data}
+# Load raw datasets
+wash <- read_csv('wash.csv', show_col_types = FALSE)
+stunt <- read_csv('stunt.csv', show_col_types = FALSE)
+```
+
+## Raw Data Overview
+
+### WASH Dataset Structure
+
+The WASH dataset contains `r format(nrow(wash), big.mark=",")` observations across `r n_distinct(wash$Location)` countries from `r min(wash$Period)` to `r max(wash$Period)`, broken down by residence type (Rural, Urban, Total).
+
+```{r wash-raw-summary}
+wash %>%
+  summarise(
+    Observations = format(n(), big.mark = ","),
+    Countries = n_distinct(Location),
+    `Year Range` = paste(min(Period), "-", max(Period)),
+    `Residence Types` = n_distinct(Dim1)
+  ) %>%
+  kable(caption = "WASH Dataset Overview")
+```
+
+### Stunting Dataset Structure
+
+The stunting dataset contains `r format(nrow(stunt), big.mark=",")` observations across `r n_distinct(stunt$GEO_NAME_SHORT)` geographic areas from `r min(stunt$DIM_TIME)` to `r max(stunt$DIM_TIME)`.
+
+```{r stunt-raw-summary}
+stunt %>%
+  count(DIM_GEO_CODE_TYPE, name = "Count") %>%
+  kable(caption = "Geographic Types in Stunting Dataset")
+```
+
+**Important:** The stunting dataset includes both country-level data and regional aggregates (WHO regions, income groups). We filter to country-level only for our analysis.
+
+## Data Cleaning and Preparation
+
+Our data preparation involved five key steps:
+
+1.  **Filter to country-level observations** - Remove regional aggregates from stunting data
+2.  **Standardize country names** - Handle naming differences between datasets (e.g., accent marks)
+3.  **Add World Bank income classifications** - Enable economic analysis
+4.  **Aggregate and merge datasets** - Average across sex/residence categories, merge on country-year
+5.  **Create 2018 cross-sectional dataset** - Focus year with good coverage pre-COVID
+
+```{r data-cleaning-step1-2}
+# Step 1: Filter stunting to country-level only
+stunt_countries <- stunt %>%
+  filter(DIM_GEO_CODE_TYPE == "COUNTRY")
+
+# Step 2: Country name mapping
+name_mapping <- tribble(
+  ~stunt_name, ~wash_name,
+  "Côte d'Ivoire", "Cote d'Ivoire"
+)
+
+stunt_countries <- stunt_countries %>%
+  mutate(Country = case_when(
+    GEO_NAME_SHORT %in% name_mapping$stunt_name ~
+      name_mapping$wash_name[match(GEO_NAME_SHORT, name_mapping$stunt_name)],
+    TRUE ~ GEO_NAME_SHORT
+  ))
+```
+
+**Step 3: World Bank income classification** - We classify each country according to FY2018 World Bank income tiers (Low income, Lower middle income, Upper middle income, High income). *Code hidden for brevity - includes 130+ country classifications.*
+
+```{r data-cleaning-step3}
+#| echo: false
+# Step 3: World Bank income classification (FY2018)
+income_classification <- tribble(
+  ~Country, ~income_tier,
+  # High income
+  "Australia", "High income", "Austria", "High income", "Bahrain", "High income",
+  "Belgium", "High income", "Canada", "High income", "Chile", "High income",
+  "Croatia", "High income", "Cyprus", "High income", "Czechia", "High income",
+  "Denmark", "High income", "Estonia", "High income", "Finland", "High income",
+  "France", "High income", "Germany", "High income", "Greece", "High income",
+  "Hungary", "High income", "Iceland", "High income", "Ireland", "High income",
+  "Israel", "High income", "Italy", "High income", "Japan", "High income",
+  "Kuwait", "High income", "Latvia", "High income", "Lithuania", "High income",
+  "Luxembourg", "High income", "Malta", "High income",
+  "Netherlands (Kingdom of the)", "High income", "New Zealand", "High income",
+  "Norway", "High income", "Oman", "High income", "Poland", "High income",
+  "Portugal", "High income", "Qatar", "High income", "Republic of Korea", "High income",
+  "Romania", "High income", "Saudi Arabia", "High income", "Singapore", "High income",
+  "Slovakia", "High income", "Slovenia", "High income", "Spain", "High income",
+  "Sweden", "High income", "Switzerland", "High income",
+  "Trinidad and Tobago", "High income",
+  "United Kingdom of Great Britain and Northern Ireland", "High income",
+  "United States of America", "High income", "Uruguay", "High income",
+  # Upper middle income
+  "Albania", "Upper middle income", "Azerbaijan", "Upper middle income",
+  "Belarus", "Upper middle income", "Bosnia and Herzegovina", "Upper middle income",
+  "Botswana", "Upper middle income", "Brazil", "Upper middle income",
+  "Bulgaria", "Upper middle income", "China", "Upper middle income",
+  "Colombia", "Upper middle income", "Costa Rica", "Upper middle income",
+  "Cuba", "Upper middle income", "Dominican Republic", "Upper middle income",
+  "Ecuador", "Upper middle income", "Fiji", "Upper middle income",
+  "Gabon", "Upper middle income", "Georgia", "Upper middle income",
+  "Guatemala", "Upper middle income", "Guyana", "Upper middle income",
+  "Iran (Islamic Republic of)", "Upper middle income", "Iraq", "Upper middle income",
+  "Jamaica", "Upper middle income", "Jordan", "Upper middle income",
+  "Kazakhstan", "Upper middle income", "Lebanon", "Upper middle income",
+  "Libya", "Upper middle income", "Malaysia", "Upper middle income",
+  "Maldives", "Upper middle income", "Mauritius", "Upper middle income",
+  "Mexico", "Upper middle income", "Montenegro", "Upper middle income",
+  "Namibia", "Upper middle income", "North Macedonia", "Upper middle income",
+  "Panama", "Upper middle income", "Paraguay", "Upper middle income",
+  "Peru", "Upper middle income", "Republic of Moldova", "Upper middle income",
+  "Russian Federation", "Upper middle income", "Samoa", "Upper middle income",
+  "Serbia", "Upper middle income", "South Africa", "Upper middle income",
+  "Sri Lanka", "Upper middle income", "Suriname", "Upper middle income",
+  "Thailand", "Upper middle income", "Tonga", "Upper middle income",
+  "Tunisia", "Upper middle income", "Turkmenistan", "Upper middle income",
+  "Tuvalu", "Upper middle income",
+  # Lower middle income
+  "Bangladesh", "Lower middle income", "Bhutan", "Lower middle income",
+  "Bolivia (Plurinational State of)", "Lower middle income",
+  "Cabo Verde", "Lower middle income", "Cambodia", "Lower middle income",
+  "Congo", "Lower middle income", "Cote d'Ivoire", "Lower middle income",
+  "Djibouti", "Lower middle income", "El Salvador", "Lower middle income",
+  "Eswatini", "Lower middle income", "Ghana", "Lower middle income",
+  "Honduras", "Lower middle income", "India", "Lower middle income",
+  "Indonesia", "Lower middle income", "Kiribati", "Lower middle income",
+  "Kyrgyzstan", "Lower middle income",
+  "Lao People's Democratic Republic", "Lower middle income",
+  "Lesotho", "Lower middle income", "Mauritania", "Lower middle income",
+  "Mongolia", "Lower middle income", "Morocco", "Lower middle income",
+  "Myanmar", "Lower middle income", "Nicaragua", "Lower middle income",
+  "Nigeria", "Lower middle income", "Pakistan", "Lower middle income",
+  "Papua New Guinea", "Lower middle income", "Philippines", "Lower middle income",
+  "Sao Tome and Principe", "Lower middle income", "Senegal", "Lower middle income",
+  "Solomon Islands", "Lower middle income", "Sudan", "Lower middle income",
+  "Tajikistan", "Lower middle income", "Timor-Leste", "Lower middle income",
+  "Ukraine", "Lower middle income", "Uzbekistan", "Lower middle income",
+  "Vanuatu", "Lower middle income", "Viet Nam", "Lower middle income",
+  "Zambia", "Lower middle income", "Zimbabwe", "Lower middle income",
+  # Low income
+  "Afghanistan", "Low income", "Benin", "Low income", "Burundi", "Low income",
+  "Central African Republic", "Low income", "Chad", "Low income",
+  "Comoros", "Low income", "Democratic People's Republic of Korea", "Low income",
+  "Democratic Republic of the Congo", "Low income", "Eritrea", "Low income",
+  "Ethiopia", "Low income", "Gambia", "Low income", "Guinea", "Low income",
+  "Guinea-Bissau", "Low income", "Haiti", "Low income", "Liberia", "Low income",
+  "Madagascar", "Low income", "Malawi", "Low income", "Mali", "Low income",
+  "Mozambique", "Low income", "Nepal", "Low income", "Niger", "Low income",
+  "Rwanda", "Low income", "Sierra Leone", "Low income", "Somalia", "Low income",
+  "South Sudan", "Low income", "Syrian Arab Republic", "Low income",
+  "Togo", "Low income", "Uganda", "Low income",
+  "United Republic of Tanzania", "Low income", "Yemen", "Low income"
+)
+
+# Step 4: Region labels and data preparation
+region_labels <- c(
+  "AFR" = "Africa", "AMR" = "Americas", "EMR" = "Eastern Mediterranean",
+  "EUR" = "Europe", "SEAR" = "South-East Asia", "WPR" = "Western Pacific"
+)
+
+stunt_clean <- stunt_countries %>%
+  filter(DIM_SEX %in% c("FEMALE", "MALE", "TOTAL")) %>%
+  group_by(Country, DIM_TIME) %>%
+  summarise(stunting_rate = mean(RATE_PER_100_N, na.rm = TRUE), .groups = "drop") %>%
+  rename(Year = DIM_TIME) %>%
+  mutate(Year = as.numeric(Year))
+
+wash_clean <- wash %>%
+  group_by(Location, Period, ParentLocationCode, ParentLocation) %>%
+  summarise(access_water = mean(FactValueNumeric, na.rm = TRUE), .groups = "drop") %>%
+  rename(Country = Location, Year = Period,
+         Region = ParentLocationCode, Region_name = ParentLocation) %>%
+  mutate(Year = as.numeric(Year))
+
+merged_data <- inner_join(stunt_clean, wash_clean, by = c("Country", "Year")) %>%
+  left_join(income_classification, by = "Country") %>%
+  mutate(
+    income_tier = factor(income_tier, levels = c(
+      "Low income", "Lower middle income", "Upper middle income", "High income"
+    )),
+    Region_full = region_labels[Region]
+  )
+
+# Step 5: Create 2018 cross-sectional dataset
+data_2018 <- merged_data %>%
+  filter(Year == 2018) %>%
+  drop_na(access_water, stunting_rate)
+```
+
+```{r data-summary-table}
+# Summary of data cleaning results
+tibble(
+  Step = c("Raw stunting observations", "Country-level only",
+           "Merged dataset (all years)", "2018 cross-section",
+           "With income classification"),
+  `N Observations` = c(
+    format(nrow(stunt), big.mark = ","),
+    format(nrow(stunt_countries), big.mark = ","),
+    format(nrow(merged_data), big.mark = ","),
+    nrow(data_2018),
+    sum(!is.na(data_2018$income_tier))
+  ),
+  `N Countries` = c(
+    n_distinct(stunt$GEO_NAME_SHORT),
+    n_distinct(stunt_countries$Country),
+    n_distinct(merged_data$Country),
+    n_distinct(data_2018$Country),
+    sum(!is.na(data_2018$income_tier))
+  )
+) %>%
+  kable(caption = "Data Cleaning Summary")
+```
+
+## Summary Statistics
+
+### Key Variables (2018 Cross-Section)
+
+```{r summary-stats-2018}
+data_2018 %>%
+  summarise(
+    Variable = "2018 Sample",
+    `N Countries` = n(),
+    `Water Access Mean (%)` = round(mean(access_water), 1),
+    `Water Access SD` = round(sd(access_water), 1),
+    `Stunting Mean (%)` = round(mean(stunting_rate), 1),
+    `Stunting SD` = round(sd(stunting_rate), 1)
+  ) %>%
+  kable(caption = "Summary Statistics: 2018 Cross-Section")
+```
+
+### Distribution by Income Tier (2018)
+
+```{r summary-by-income}
+data_2018 %>%
+  filter(!is.na(income_tier)) %>%
+  group_by(`Income Tier` = income_tier) %>%
+  summarise(
+    `N Countries` = n(),
+    `Mean Water (%)` = round(mean(access_water), 1),
+    `Mean Stunting (%)` = round(mean(stunting_rate), 1),
+    .groups = "drop"
+  ) %>%
+  kable(caption = "Water Access and Stunting by Income Tier (2018)")
+```
+
+### Distribution by WHO Region (2018)
+
+```{r summary-by-region}
+data_2018 %>%
+  group_by(Region = Region_full) %>%
+  summarise(
+    `N Countries` = n(),
+    `Mean Water (%)` = round(mean(access_water), 1),
+    `Mean Stunting (%)` = round(mean(stunting_rate), 1),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(`N Countries`)) %>%
+  kable(caption = "Water Access and Stunting by WHO Region (2018)")
+```
+
+## Exploratory Visualizations
+
+### Distributions of Key Variables (2018)
+
+```{r viz-distributions, fig.width=10, fig.height=4}
+p1 <- ggplot(data_2018, aes(x = access_water)) +
+  geom_histogram(bins = 20, fill = "steelblue", color = "white", alpha = 0.8) +
+  labs(title = "Distribution of Water Access Across Countries (2018)",
+       x = "Population with Safe Water Access (%)",
+       y = "Number of Countries") +
+  theme(plot.title = element_text(face = "bold", size = 10))
+
+p2 <- ggplot(data_2018, aes(x = stunting_rate)) +
+  geom_histogram(bins = 20, fill = "coral", color = "white", alpha = 0.8) +
+  labs(title = "Distribution of Stunting Prevalence Across Countries (2018)",
+       x = "Stunting Rate in Children Under 5 (%)",
+       y = "Number of Countries") +
+  theme(plot.title = element_text(face = "bold", size = 10))
+
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+### Pairwise Relationships (2018)
+
+The matrix plot below compares water access and stunting, colored by the four World Bank income tiers. The **upper-right cell** shows correlation coefficients for each income group. The **lower-left cell** shows the scatter plot of countries. The **diagonal cells (top-left and bottom-right)** show density curves illustrating how each variable is distributed.
+
+```{r ggpairs-plot, fig.width=10, fig.height=8}
+data_2018 %>%
+  filter(!is.na(income_tier)) %>%
+  select(`Water Access (%)` = access_water,
+         `Stunting Rate (%)` = stunting_rate,
+         `Income Tier` = income_tier) %>%
+  ggpairs(
+    columns = 1:2,
+    mapping = aes(color = `Income Tier`, alpha = 0.6),
+    upper = list(continuous = wrap("cor", size = 4)),
+    lower = list(continuous = wrap("points", size = 2)),
+    diag = list(continuous = wrap("densityDiag", alpha = 0.5)),
+    title = "Water Access vs Stunting by Income Tier (2018, N = 86 Countries)"
+  ) +
+  scale_color_brewer(palette = "RdYlGn") +
+  scale_fill_brewer(palette = "RdYlGn") +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+# Methodology
+
+## Overview of Analytical Approach
+
+We employ a multi-faceted analytical strategy using **2018 cross-sectional data** to examine the relationship between water access and child stunting:
+
+| Step | Method | Purpose |
+|----|----|----|
+| 1 | Correlation Analysis | Initial exploration of relationship strength |
+| 2 | ANOVA | Test if income is a significant confounder |
+| 3 | Simple Linear Regression | Quantify water-stunting association |
+| 4 | Multiple Linear Regression | Test association controlling for income |
+
+## Statistical Methods
+
+### 1. Correlation Analysis
+
+We use **Pearson correlation coefficients** to quantify the linear association between water access and stunting prevalence. This measures the strength and direction of the relationship on a scale from -1 (perfect negative) to +1 (perfect positive).
+
+### 2. Analysis of Variance (ANOVA)
+
+Before fitting regression models, we use one-way ANOVA to test whether stunting rates differ significantly across World Bank income tiers. A significant result indicates income should be included as a control variable.
+
+### 3. Simple Linear Regression
+
+To quantify the expected change in stunting for each unit change in water access, we fit:
+
+$$\text{Stunting}_i = \beta_0 + \beta_1 \times \text{WaterAccess}_i + \epsilon_i$$
+
+### 4. Multiple Linear Regression (Controlling for Income)
+
+To test whether water access predicts stunting *independent of economic development*, we fit:
+
+$$\text{Stunting}_i = \beta_0 + \beta_1 \times \text{WaterAccess}_i + \beta_2 \times \text{IncomeTier}_i + \epsilon_i$$
+
+This allows us to assess whether water access has an effect beyond what income alone explains.
+
+## Justification for Methods
+
+-   **Cross-sectional analysis (2018):** Provides a snapshot with good data coverage before COVID-19 disruptions. We chose 2018 as it offers the most complete global coverage.
+-   **Multiple regression:** Addresses confounding by income—a critical consideration since wealthier countries have both better water infrastructure and lower stunting.
+-   **Regional stratification:** Accounts for geographic heterogeneity in development contexts.
+
+# Analysis and Findings
+
+## Research Question 1: Is Water Access Associated with Stunting? (2018)
+
+We address this question using a sequence of statistical methods, building from initial exploration to controlled regression analysis.
+
+### Step 1: Correlation Analysis
+
+First, we examine whether there is a potential linear relationship between water access and stunting using Pearson correlation.
+
+```{r q1-scatter, fig.width=8, fig.height=5}
+ggplot(data_2018, aes(x = access_water, y = stunting_rate)) +
+  geom_point(alpha = 0.6, color = "darkblue", size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "red", linewidth = 1) +
+  labs(
+    title = "Relationship Between Water Access and Child Stunting (2018)",
+    subtitle = paste("Each point represents one country (N =", nrow(data_2018), "countries)"),
+    x = "Population with Access to Safely Managed Drinking Water (%)",
+    y = "Stunting Prevalence in Children Under 5 (%)",
+    caption = "Red line shows linear regression fit with 95% confidence interval"
+  ) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+```{r q1-correlation}
+# Pearson correlation test
+cor_result <- cor.test(data_2018$access_water, data_2018$stunting_rate)
+```
+
+```{r q1-correlation-table}
+tibble(
+  Statistic = c("Correlation (r)", "95% CI Lower", "95% CI Upper", "p-value"),
+  Value = c(
+    round(cor_result$estimate, 3),
+    round(cor_result$conf.int[1], 3),
+    round(cor_result$conf.int[2], 3),
+    "< 0.001"
+  )
+) %>%
+  kable(caption = "Pearson Correlation: Water Access and Stunting (2018)")
+```
+
+**Interpretation:** The strong negative correlation (r $\approx$ -0.73) indicates that countries with higher water access tend to have substantially lower stunting rates. This warrants further investigation with regression analysis.
+
+### Step 2: ANOVA - Testing Income as a Potential Confounder
+
+Before fitting regression models, we test whether income tier significantly affects stunting rates. If income is a significant predictor, it should be included as a control variable in our regression.
+
+```{r q1-anova-setup}
+# Prepare data with income classification
+data_2018_income <- data_2018 %>% filter(!is.na(income_tier))
+
+# ANOVA: Does stunting differ significantly by income tier?
+stunting_income_anova <- aov(stunting_rate ~ income_tier, data = data_2018_income)
+stunting_income_anova_tidy <- tidy(stunting_income_anova)
+```
+
+```{r q1-anova-table}
+stunting_income_anova_tidy %>%
+  filter(term != "Residuals") %>%
+  mutate(
+    term = "Income Tier",
+    sumsq = round(sumsq, 1),
+    meansq = round(meansq, 1),
+    statistic = round(statistic, 2),
+    p.value = ifelse(p.value < 0.001, "< 0.001", round(p.value, 4))
+  ) %>%
+  kable(caption = "ANOVA: Stunting Rate by Income Tier (2018)",
+        col.names = c("Source", "df", "Sum Sq", "Mean Sq", "F-statistic", "p-value"))
+```
+
+**Interpretation:** The highly significant ANOVA result (p \< 0.001) confirms that stunting rates differ substantially across income tiers. This suggests income is an important confounder that should be controlled for in our regression analysis.
+
+### Step 3: Simple Linear Regression
+
+We first fit a simple linear regression to quantify the relationship between water access and stunting without controlling for other variables.
+
+```{r q1-simple-regression}
+# Simple linear regression: stunting ~ water access
+model_simple <- lm(stunting_rate ~ access_water, data = data_2018)
+```
+
+```{r q1-simple-table}
+tidy(model_simple) %>%
+  mutate(
+    term = case_when(
+      term == "(Intercept)" ~ "Intercept",
+      term == "access_water" ~ "Water Access (%)"
+    ),
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 2),
+    p.value = ifelse(p.value < 0.001, "< 0.001", round(p.value, 3))
+  ) %>%
+  kable(caption = "Simple Linear Regression: Stunting ~ Water Access",
+        col.names = c("Term", "Estimate", "Std. Error", "t-value", "p-value"))
+```
+
+```{r q1-simple-fit}
+tibble(
+  Metric = c("R-squared", "Adjusted R-squared", "N (countries)"),
+  Value = c(
+    round(summary(model_simple)$r.squared, 3),
+    round(summary(model_simple)$adj.r.squared, 3),
+    nrow(data_2018)
+  )
+) %>%
+  kable(caption = "Simple Regression Model Fit")
+```
+
+**Interpretation:** Each 1-percentage-point increase in water access is associated with approximately 0.30-percentage-point decrease in stunting. The model explains about 53% of the variance in stunting rates (R² $\approx$ 0.53).
+
+### Step 4: Multiple Linear Regression (Controlling for Income)
+
+Since ANOVA confirmed income is a significant predictor of stunting, we now include it as a control variable to test whether water access has an independent effect.
+
+```{r q1-multiple-regression}
+# Multiple regression: stunting ~ water access + income tier
+model_multiple <- lm(stunting_rate ~ access_water + income_tier, data = data_2018_income)
+```
+
+```{r q1-multiple-table}
+tidy(model_multiple) %>%
+  mutate(
+    term = case_when(
+      term == "(Intercept)" ~ "Intercept",
+      term == "access_water" ~ "Water Access (%)",
+      str_detect(term, "income_tier") ~ str_replace(term, "income_tier", "")
+    ),
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 2),
+    p.value = ifelse(p.value < 0.001, "< 0.001", round(p.value, 3))
+  ) %>%
+  kable(caption = "Multiple Regression: Stunting ~ Water Access + Income Tier",
+        col.names = c("Term", "Estimate", "Std. Error", "t-value", "p-value"))
+```
+
+```{r q1-multiple-fit}
+tibble(
+  Metric = c("R-squared", "Adjusted R-squared", "N (countries)"),
+  Value = c(
+    round(summary(model_multiple)$r.squared, 3),
+    round(summary(model_multiple)$adj.r.squared, 3),
+    nrow(data_2018_income)
+  )
+) %>%
+  kable(caption = "Multiple Regression Model Fit")
+```
+
+### Summary of Findings
+
+```{r q1-values, include=FALSE}
+r_val <- round(cor_result$estimate, 2)
+beta_simple <- round(coef(model_simple)[2], 3)
+r2_simple <- round(summary(model_simple)$r.squared, 3)
+beta_multiple <- round(coef(model_multiple)[2], 3)
+r2_multiple <- round(summary(model_multiple)$r.squared, 3)
+```
+
+```{r q1-comparison-table}
+tibble(
+  Analysis = c("Correlation", "Simple Regression", "Multiple Regression"),
+  `Water Effect` = c(
+    paste("r =", r_val),
+    paste("β =", beta_simple),
+    paste("β =", beta_multiple)
+  ),
+  `Model Fit` = c(
+    paste("R² =", round(r_val^2, 3)),
+    paste("R² =", r2_simple),
+    paste("R² =", r2_multiple)
+  ),
+  Interpretation = c(
+    "Strong negative association",
+    "Significant without controls",
+    "Significant after controlling for income"
+  )
+) %>%
+  kable(caption = "Summary: Statistical Analysis of Water-Stunting Relationship")
+```
+
+**Key Findings:**
+
+1.  **Correlation analysis** reveals a strong negative association (r = `r r_val`, p \< 0.001) between water access and stunting. This suggests that higher water access is associated with lower stunting rates.
+
+2.  **ANOVA** confirms income is a significant confounder (p \< 0.001), justifying its inclusion in regression.
+
+3.  **Simple regression** shows each 1% increase in water access is associated with a `r abs(beta_simple)`% decrease in stunting (R² = `r r2_simple`), highlighting the potential impact of improved water accessibility on child health
+
+4.  **Multiple regression** demonstrates that water access remains significant (β = `r beta_multiple`) even after controlling for income, suggesting an independent effect beyond economic development.
+
+## Research Question 2: Do Income Disparities Affect Both Outcomes? (2018)
+
+Having established that income is a significant confounder in RQ1, we now explore the magnitude of income disparities in both water access and stunting.
+
+### Water Access by Income Tier
+
+```{r q2-water-analysis}
+income_water_summary <- data_2018 %>%
+  filter(!is.na(income_tier)) %>%
+  group_by(income_tier) %>%
+  summarise(
+    n = n(),
+    mean_water = mean(access_water, na.rm = TRUE),
+    se_water = sd(access_water, na.rm = TRUE) / sqrt(n),
+    .groups = "drop"
+  )
+
+water_anova <- aov(access_water ~ income_tier, data = data_2018 %>% filter(!is.na(income_tier)))
+water_anova_tidy <- tidy(water_anova)
+```
+
+```{r q2-water-plot, fig.width=8, fig.height=5}
+ggplot(income_water_summary, aes(x = income_tier, y = mean_water, fill = income_tier)) +
+  geom_col(width = 0.7) +
+  geom_errorbar(aes(ymin = mean_water - se_water, ymax = mean_water + se_water),
+                width = 0.2) +
+  geom_text(aes(label = paste0(round(mean_water, 1), "%")),
+            vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_brewer(palette = "RdYlGn", direction = 1) +
+  scale_y_continuous(limits = c(0, 110), breaks = seq(0, 100, 20)) +
+  labs(title = "Mean Water Access by World Bank Income Classification (2018)",
+       subtitle = "Error bars show standard error of the mean",
+       x = "World Bank Income Tier",
+       y = "Mean Population with Safe Water Access (%)") +
+  theme(legend.position = "none", plot.title = element_text(face = "bold"))
+```
+
+```{r q2-water-anova-table}
+water_anova_tidy %>%
+  filter(term != "Residuals") %>%
+  mutate(
+    term = "Income Tier",
+    sumsq = round(sumsq, 1),
+    meansq = round(meansq, 1),
+    statistic = round(statistic, 2),
+    p.value = ifelse(p.value < 0.001, "< 0.001", round(p.value, 4))
+  ) %>%
+  kable(caption = "ANOVA: Water Access by Income Tier",
+        col.names = c("Source", "df", "Sum Sq", "Mean Sq", "F-statistic", "p-value"))
+```
+
+### Stunting Rates by Income Tier
+
+```{r q2-stunting-analysis}
+income_stunting_summary <- data_2018 %>%
+  filter(!is.na(income_tier)) %>%
+  group_by(income_tier) %>%
+  summarise(
+    n = n(),
+    mean_stunting = mean(stunting_rate, na.rm = TRUE),
+    se_stunting = sd(stunting_rate, na.rm = TRUE) / sqrt(n),
+    .groups = "drop"
+  )
+
+stunting_anova <- aov(stunting_rate ~ income_tier, data = data_2018 %>% filter(!is.na(income_tier)))
+stunting_anova_tidy <- tidy(stunting_anova)
+```
+
+```{r q2-stunting-plot, fig.width=8, fig.height=5}
+ggplot(income_stunting_summary, aes(x = income_tier, y = mean_stunting, fill = income_tier)) +
+  geom_col(width = 0.7) +
+  geom_errorbar(aes(ymin = mean_stunting - se_stunting, ymax = mean_stunting + se_stunting),
+                width = 0.2) +
+  geom_text(aes(label = paste0(round(mean_stunting, 1), "%")),
+            vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_brewer(palette = "RdYlGn", direction = -1) +
+  scale_y_continuous(limits = c(0, 45), breaks = seq(0, 40, 10)) +
+  labs(title = "Mean Stunting Prevalence by World Bank Income Classification (2018)",
+       subtitle = "Error bars show standard error of the mean",
+       x = "World Bank Income Tier",
+       y = "Mean Stunting Prevalence in Children Under 5 (%)") +
+  theme(legend.position = "none", plot.title = element_text(face = "bold"))
+```
+
+```{r q2-stunting-anova-table}
+stunting_anova_tidy %>%
+  filter(term != "Residuals") %>%
+  mutate(
+    term = "Income Tier",
+    sumsq = round(sumsq, 1),
+    meansq = round(meansq, 1),
+    statistic = round(statistic, 2),
+    p.value = ifelse(p.value < 0.001, "< 0.001", round(p.value, 4))
+  ) %>%
+  kable(caption = "ANOVA: Stunting Rate by Income Tier",
+        col.names = c("Source", "df", "Sum Sq", "Mean Sq", "F-statistic", "p-value"))
+```
+
+### The Double Burden Visualization
+
+```{r q2-double-burden, fig.width=10, fig.height=6}
+ggplot(data_2018 %>% filter(!is.na(income_tier)),
+       aes(x = access_water, y = stunting_rate, color = income_tier)) +
+  geom_point(size = 3, alpha = 0.7) +
+  scale_color_brewer(palette = "RdYlGn", direction = 1, name = "Income Tier") +
+  labs(
+    title = "The Double Burden: Low-Income Countries Face Both Poor Water Access and High Stunting (2018)",
+    subtitle = "Each point represents one country; colors indicate World Bank income classification",
+    x = "Population with Access to Safely Managed Drinking Water (%)",
+    y = "Stunting Prevalence in Children Under 5 (%)",
+    caption = "Shaded area highlights 'crisis zone' with low water access (<70%) and high stunting (>20%)"
+  ) +
+  theme(plot.title = element_text(face = "bold", size = 11)) +
+  annotate("rect", xmin = 0, xmax = 70, ymin = 20, ymax = 50,
+           alpha = 0.1, fill = "red") +
+  annotate("text", x = 35, y = 47, label = "Crisis Zone:\nLow water + High stunting",
+           size = 3, color = "darkred", fontface = "italic")
+```
+
+### Interpretation
+
+**Key Findings:**
+
+1.  **Water access gap:** Low-income countries have average water access of \~`r round(income_water_summary$mean_water[1], 0)`% compared to \~`r round(income_water_summary$mean_water[4], 0)`% in high-income countries (ANOVA p \< 0.001).
+
+2.  **Stunting gap:** Low-income countries have stunting rates approximately `r round(income_stunting_summary$mean_stunting[1] / income_stunting_summary$mean_stunting[4], 0)`x higher than high-income countries (ANOVA p \< 0.001).
+
+3.  **Double burden:** The poorest countries face compounding disadvantages—inadequate water infrastructure AND high child malnutrition.
+
+## Research Question 3: How Do Relationships Vary by Region? (2018)
+
+### Regional Summary Statistics
+
+```{r q3-regional-analysis}
+regional_summary <- data_2018 %>%
+  group_by(Region_full) %>%
+  summarise(
+    n_countries = n(),
+    mean_water = mean(access_water, na.rm = TRUE),
+    mean_stunting = mean(stunting_rate, na.rm = TRUE),
+    correlation = cor(access_water, stunting_rate, use = "complete.obs"),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_countries))
+```
+
+```{r q3-regional-table}
+regional_summary %>%
+  mutate(
+    mean_water = round(mean_water, 1),
+    mean_stunting = round(mean_stunting, 1),
+    correlation = round(correlation, 2)
+  ) %>%
+  kable(
+    caption = "Water Access and Stunting by WHO Region (2018)",
+    col.names = c("Region", "N Countries", "Mean Water (%)",
+                  "Mean Stunting (%)", "Correlation (r)")
+  )
+```
+
+### Regional Scatter Plots
+
+```{r q3-regional-scatter, fig.width=10, fig.height=7}
+data_2018 %>%
+  left_join(regional_summary %>% select(Region_full, n_countries), by = "Region_full") %>%
+  mutate(Region_label = paste0(Region_full, " (n=", n_countries, ")")) %>%
+  ggplot(aes(x = access_water, y = stunting_rate)) +
+  geom_point(alpha = 0.7, color = "steelblue", size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "red", linewidth = 0.8) +
+  facet_wrap(~Region_label, scales = "fixed") +
+  labs(
+    title = "Water Access vs Child Stunting by WHO Region (2018)",
+    subtitle = "Each point is one country; red line shows regional linear trend with 95% CI",
+    x = "Population with Safe Water Access (%)",
+    y = "Stunting Prevalence (%)"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold", size = 9)
+  )
+```
+
+### Correlation Comparison Across Regions
+
+```{r q3-correlation-plot, fig.width=8, fig.height=5}
+regional_summary %>%
+  mutate(Region_full = factor(Region_full, levels = Region_full[order(correlation)])) %>%
+  ggplot(aes(x = correlation, y = Region_full)) +
+  geom_col(aes(fill = correlation), width = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_text(aes(label = paste0("r = ", round(correlation, 2), " (n=", n_countries, ")")),
+            hjust = ifelse(regional_summary$correlation < -0.3, 1.1, -0.1),
+            size = 3.5) +
+  scale_fill_gradient2(low = "darkred", mid = "gray90", high = "darkblue", midpoint = 0) +
+  scale_x_continuous(limits = c(-1, 0.3)) +
+  labs(
+    title = "Strength of Water-Stunting Association by WHO Region (2018)",
+    subtitle = "Pearson correlation coefficients; more negative = stronger inverse relationship",
+    x = "Correlation Coefficient (r)",
+    y = "WHO Region"
+  ) +
+  theme(legend.position = "none", plot.title = element_text(face = "bold"))
+```
+
+### Interpretation
+
+```{r q3-values, include=FALSE}
+strongest <- regional_summary %>% slice_min(correlation, n = 1)
+weakest <- regional_summary %>% slice_max(correlation, n = 1)
+```
+
+**Key Findings:**
+
+1.  **Strongest association:** `r strongest$Region_full` shows the strongest negative correlation (r = `r round(strongest$correlation, 2)`), reflecting high variation in both development indicators.
+
+2.  **Weakest association:** `r weakest$Region_full` shows the weakest correlation (r = `r round(weakest$correlation, 2)`), where most countries have similar development levels.
+
+3.  **Pattern:** Regions with greater heterogeneity in economic development show stronger water-stunting associations.
+
+# Conclusion
+
+Better access to clean drinking water was associated with lower stunting prevelance at the country-level, but the strength of the association weakened after controlling for country income level (beta in unadjusted model: -0.304, SE: 0.027, p\<0.001; beta in adjusted model: -0.094, SE: 0.040, p=0.022). Correlations between water access and stunting also varied by region. These findings suggest that investment in water infrastructure may yield child health benefits, but policymakers need to consider other factors given that income was a significant confounding factor. Additionally, regional context matters for intervention design, as the strength of associations differed across geographic areas.
+
+Despite these insights, several limitations warrant consideration. The cross-sectional design limits causal inference, and country-level data may mask within-country variation. Missing data for approximately 50 countries and incomplete control for confounders such as sanitation, healthcare access, and food security further constrain interpretation. Furthermore, measurement error in water access estimates and stunting prevalence may affect the precision of our findings.
+
+Future studies should aim to address these limitations. Potentially exploring causal models using longitudinal panel designs with country fixed effects, include comprehensive sanitation and hygiene indicators, and conduct sub-national analyses where data permits to better understand the multiple factors affecting stunting. Additionally, methodological approaches such as temporal interpolation could be used to address missing data and better average incomplete global datasets. These steps will help clarify the pathways through which water access influences child nutrition and inform more targeted, context-sensitive interventions to reduce stunting.
+
+# References
+
+1.  Guerrant, R. L., Oria, R. B., Moore, S. R., Oria, M. O., & Lima, A. A. (1992). Malnutrition as an enteric infectious disease with long-term effects on child development. Nutrition Reviews, 66(9), 487-505. https://doi.org/10.1111/j.1753-4887.2008.00082.x
+
+2.  Bhutta, Z. A., Guerrant, R. L., & Nelson III, C. A. (2017). Neurodevelopment, nutrition, and inflammation: The evolving global child health landscape. Pediatrics, 139(Supplement 1), S12-S22.
+
+3.  World Health Organization & United Nations Children's Fund. (2025). Progress on household drinking water and sanitation 2000-2024: Special focus on inequalities. Geneva: WHO and UNICEF. Retrieved from https://www.who.int/news/item/26-08-2025-1-in-4-people-globally-still-lack-access-to-safe-drinking-water---who--unicef
+
+4.  United Nations Children's Fund. (2025). Access to drinking water. UNICEF DATA. Retrieved from https://data.unicef.org/topic/water-and-sanitation/drinking-water/
+
+5.  United Nations Children's Fund (UNICEF), World Health Organization (WHO), & World Bank. (2025). Levels and trends in child malnutrition: UNICEF/WHO/World Bank Group Joint Child Malnutrition Estimates – Key findings of the 2025 edition. New York: UNICEF and WHO. Retrieved from https://data.unicef.org/resources/jme/
+
+6.  World Health Organization. Global Health Observatory. Retrieved from https://www.who.int/data/gho
+
+# Appendix
+
+## A. Countries Included in Analysis (2018)
+
+```{r appendix-countries}
+data_2018 %>%
+  arrange(Region_full, Country) %>%
+  select(Country, Region_full, income_tier, access_water, stunting_rate) %>%
+  mutate(
+    access_water = round(access_water, 1),
+    stunting_rate = round(stunting_rate, 1)
+  ) %>%
+  kable(
+    caption = "All Countries in 2018 Analysis",
+    col.names = c("Country", "Region", "Income Tier", "Water Access (%)", "Stunting (%)")
+  )
+```
