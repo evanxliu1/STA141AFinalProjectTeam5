@@ -18,6 +18,16 @@ execute:
 editor: visual
 ---
 
+\newpage
+
+Danielle Chang 922215038 daychang\@ucdavis.edu
+
+Rhea Mishra 922614163 rhmishra\@ucdavis.edu
+
+Evan Liu 922033126 naoliu\@ucdavis.edu
+
+Davrina Rianda 918983400 drianda\@ucdavis.edu
+
 ```{r setup, echo = F}
 # Load libraries
 library(tidyverse)
